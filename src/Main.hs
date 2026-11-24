@@ -1,6 +1,9 @@
 -- Camada 1: Tipos e Dados do Campeonato
 import Data.List (nub, sort , sortBy , maximumBy)
 import Data.Ord (Down (..), comparing)
+import Data.Char (isSpace)
+import Data.Either (lefts, rights)
+import Text.Read (readMaybe)
 
 type Time = String
 
@@ -183,22 +186,224 @@ mediaGols ps = Just (fromIntegral totalGols / fromIntegral (length ps))
 
 -- Camada 3: Leitura (Maybe, Either e formatação)
 
+data Erro
+  = CamposInvalidos Int
+  | NumeroInvalido Int
+  | PlacarNegativo Int
+  | MesmoTime Int
+  | TimeRepetidoNaRodada Int
+  deriving (Show, Eq)
+
+-- | Remove espaços em branco no início e no fim de uma String.
+trim :: String -> String
+trim = dropWhile isSpace . reverse . dropWhile isSpace . reverse
+
+-- | Quebra uma linha nos separadores usando foldr (sem recursão explícita).
+separar :: Char -> String -> [String]
+separar sep = foldr passo [[]]
+  where
+    passo c acc@(x:xs)
+      | c == sep  = [] : acc
+      | otherwise = (c : x) : xs
+    passo _ [] = [[]]
+
+-- | Converte String para Int usando readMaybe e Maybe como functor (<$>).
+lerInteiro :: Int -> String -> Either Erro Int
+lerInteiro numLinha txt =
+  maybe (Left (NumeroInvalido numLinha)) Right ((+ 0) <$> readMaybe (trim txt))
+
+-- | Valida se um valor inteiro não é negativo.
+validarNaoNegativo :: Int -> Int -> Either Erro Int
+validarNaoNegativo numLinha n
+  | n < 0     = Left (PlacarNegativo numLinha)
+  | otherwise = Right n
+  
+-- | Valida se a rodada é positiva (> 0).
+validarRodadaPositiva :: Int -> Int -> Either Erro Int
+validarRodadaPositiva numLinha r
+  | r <= 0    = Left (NumeroInvalido numLinha)
+  | otherwise = Right r
+
+-- | Valida se uma String de texto (nome do time) não está vazia.
+validarNome :: Int -> String -> Either Erro Time
+validarNome numLinha nome
+  | null limpo = Left (CamposInvalidos numLinha)
+  | otherwise  = Right limpo
+  where
+    limpo = trim nome
+
+-- | Converte uma linha numerada em Partida usando a mônada Either (notação do).
+lerPartida :: Int -> String -> Either Erro Partida
+lerPartida numLinha linha =
+  case separar ';' linha of
+    [rStr, mStr, gmStr, gvStr, vStr] -> do
+      r  <- lerInteiro numLinha rStr >>= validarRodadaPositiva numLinha
+      gm <- lerInteiro numLinha gmStr >>= validarNaoNegativo numLinha
+      gv <- lerInteiro numLinha gvStr >>= validarNaoNegativo numLinha
+      m  <- validarNome numLinha mStr
+      v  <- validarNome numLinha vStr
+      if m == v
+        then Left (MesmoTime numLinha)
+        else Right (Partida r m gm gv v)
+    _ -> Left (CamposInvalidos numLinha)
+
+-- | Filtra linhas em branco e comentários (#), preservando o número original da linha.
+linhasValidasNumeradas :: String -> [(Int, String)]
+linhasValidasNumeradas =
+  filter (not . ignorar . snd) . zip [1..] . lines
+  where
+    ignorar s =
+      let limpo = trim s
+      in null limpo || take 1 limpo == "#"
+
+-- | Verifica se algum time joga mais de uma vez na mesma rodada.
+validarRodadas :: [Partida] -> Either Erro [Partida]
+validarRodadas ps =
+  case errosRodada ps of
+    (err : _) -> Left err
+    []        -> Right ps
+
+-- | Encontra todos os erros de times repetidos na mesma rodada (usado em lerCampeonato e todosOsErros).
+errosRodada :: [Partida] -> [Erro]
+errosRodada ps =
+  concatMap verificarRodada rodadasUnicas
+  where
+    rodadasUnicas = nub (map rodada ps)
+    verificarRodada r =
+      let partidasR = filter ((== r) . rodada) ps
+          escalados = concatMap (\p -> [mandante p, visitante p]) partidasR
+      in if length escalados /= length (nub escalados)
+           then [TimeRepetidoNaRodada r]
+           else []
+
+-- | Lê o texto inteiro, parando no primeiro erro (via traverse), e valida rodadas.
+lerCampeonato :: String -> Either Erro [Partida]
+lerCampeonato texto = do
+  partidas <- traverse (uncurry lerPartida) (linhasValidasNumeradas texto)
+  validarRodadas partidas
+
+-- | Relatório com todos os erros do texto (erros de linha + erros de rodada).
+todosOsErros :: String -> [Erro]
+todosOsErros texto =
+  let resultados = map (uncurry lerPartida) (linhasValidasNumeradas texto)
+      errosLinha = lefts resultados
+      partidasOk = rights resultados
+  in errosLinha ++ errosRodada partidasOk
+
+-- | Alinha texto à esquerda ou à direita para formatar colunas da tabela.
+padDir :: Int -> String -> String
+padDir n s = s ++ replicate (max 0 (n - length s)) ' '
+
+padEsq :: Int -> String -> String
+padEsq n s = replicate (max 0 (n - length s)) ' ' ++ s
+
+-- | Formata uma única linha da classificação com sua posição.
+formatarLinha :: (Int, Linha) -> String
+formatarLinha (pos, l) =
+     padEsq 3 (show pos) ++ " | "
+  ++ padDir 14 (time l) ++ " | "
+  ++ padEsq 3 (show (pontosLinha l)) ++ " | "
+  ++ padEsq 3 (show (jogos l)) ++ " | "
+  ++ padEsq 3 (show (vitorias l)) ++ " | "
+  ++ padEsq 3 (show (empates l)) ++ " | "
+  ++ padEsq 3 (show (derrotas l)) ++ " | "
+  ++ padEsq 4 (show (saldo l))
+
+-- | Formata a tabela completa pronta para impressão.
+tabelaFormatada :: [Linha] -> String
+tabelaFormatada ls =
+  unlines (cabecalho : separador : map formatarLinha (zip [1..] ls))
+  where
+    cabecalho = "Pos | Time           | Pts |   J |   V |   E |   D |   SG"
+    separador = "----+----------------+-----+-----+-----+-----+-----+-----"
+
 
 -- Dados: campeonato de teste
 
+dadosCampeonato :: String
+dadosCampeonato = unlines
+  [ "# Campeonato de Teste - 8 times e 8 rodadas"
+  , "# rodada; mandante; gols mandante; gols visitante; visitante"
+  , ""
+  , "# Rodada 1"
+  , "1; Coritiba; 1; 8; Athletico"
+  , "1; Corinthians; 2; 1; Chapecoense"
+  , "1; Flamengo; 2; 0; Fluminense"
+  , "1; Gremio; 1; 0; Vasco"
+  , ""
+  , "# Rodada 2"
+  , "2; Coritiba; 2; 1; Corinthians"
+  , "2; Athletico; 1; 1; Flamengo"
+  , "2; Chapecoense; 0; 3; Fluminense"
+  , "2; Vasco; 0; 0; Gremio"
+  , ""
+  , "# Rodada 3"
+  , "3; Coritiba; 1; 1; Flamengo"
+  , "3; Athletico; 2; 0; Corinthians"
+  , "3; Chapecoense; 1; 2; Gremio"
+  , "3; Fluminense; 1; 0; Vasco"
+  , ""
+  , "# Rodada 4"
+  , "4; Coritiba; 2; 0; Fluminense"
+  , "4; Athletico; 1; 1; Chapecoense"
+  , "4; Corinthians; 0; 1; Vasco"
+  , "4; Flamengo; 3; 2; Gremio"
+  , ""
+  , "# Rodada 5"
+  , "5; Coritiba; 0; 1; Chapecoense"
+  , "5; Athletico; 2; 2; Fluminense"
+  , "5; Corinthians; 1; 0; Gremio"
+  , "5; Flamengo; 2; 1; Vasco"
+  , ""
+  , "# Rodada 6"
+  , "6; Coritiba; 1; 2; Gremio"
+  , "6; Athletico; 3; 0; Vasco"
+  , "6; Corinthians; 1; 1; Fluminense"
+  , "6; Chapecoense; 0; 2; Flamengo"
+  , ""
+  , "# Rodada 7"
+  , "7; Coritiba; 2; 0; Vasco"
+  , "7; Athletico; 1; 2; Gremio"
+  , "7; Corinthians; 2; 2; Flamengo"
+  , "7; Chapecoense; 1; 1; Fluminense"
+  , ""
+  , "# Rodada 8"
+  , "8; Chapecoense; 1; 0; Vasco"
+  , "8; Fluminense; 2; 1; Gremio"
+  , "8; Athletico; 0; 1; Coritiba"
+  , "8; Corinthians; 0; 1; Flamengo"
+  ]
 
--- Main 
--- >>> ACRESCENTAR (temporário): main só para testar a Camada 2 no playground.
--- substituir isto pelo main de verdade (com tabelaFormatada).
+dadosComErros :: String
+dadosComErros = unlines
+  [ "# Entrada com erros propositais para demonstracao"
+  , "1; Coritiba; 2; 1"
+  , "1; Athletico; dois; 0; Flamengo"
+  , "2; Gremio; -1; 2; Vasco"
+  , "2; Coritiba; 1; 1; Coritiba"
+  , "3; Flamengo; 2; 0; Fluminense"
+  , "3; Flamengo; 1; 1; Vasco"
+  ]
+
+
+-- Main
+
 main :: IO ()
 main = do
-  putStrLn "Classificação final:"
-  mapM_ print (classificacao campeonato)
-  putStrLn "\nClassificação após a rodada 3:"
-  mapM_ print (classificacao (ateRodada 3 campeonato))
-  putStrLn "\nMaior goleada:"
-  print (maiorGoleada campeonato)
-  putStrLn "\nMédia de gols:"
-  print (mediaGols campeonato)
-  putStrLn "\nCampeonato vazio:"
-  print (maiorGoleada [], mediaGols [])
+  putStrLn "=== 1. LEITURA E CLASSIFICACAO FINAL ==="
+  case lerCampeonato dadosCampeonato of
+    Left err -> putStrLn ("Erro ao ler campeonato: " ++ show err)
+    Right ps -> do
+      putStrLn (tabelaFormatada (classificacao ps))
+
+      putStrLn "=== 2. CLASSIFICACAO APOS A 3a RODADA ==="
+      putStrLn (tabelaFormatada (classificacao (ateRodada 3 ps)))
+
+      putStrLn "=== 3. ESTATISTICAS DO CAMPEONATO ==="
+      putStrLn ("Maior goleada: " ++ show (maiorGoleada ps))
+      putStrLn ("Media de gols: " ++ show (mediaGols ps))
+
+  putStrLn "\n=== 4. TRATAMENTO DE ENTRADA COM ERROS ==="
+  putStrLn ("lerCampeonato (para no primeiro erro): " ++ show (lerCampeonato dadosComErros))
+  putStrLn "todosOsErros (lista todos os problemas):"
+  mapM_ print (todosOsErros dadosComErros)

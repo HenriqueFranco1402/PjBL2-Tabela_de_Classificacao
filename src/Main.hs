@@ -385,6 +385,23 @@ dadosComErros = unlines
   , "3; Flamengo; 1; 1; Vasco"
   ]
 
+-- Testes
+
+-- | Compara o valor obtido com o esperado e imprime [OK] ou [FALHA].
+testar :: (Eq a, Show a) => String -> a -> a -> IO ()
+testar nome obtido esperado
+  | obtido == esperado = putStrLn ("  [OK]    " ++ nome)
+  | otherwise          = putStrLn ("  [FALHA] " ++ nome
+                                   ++ "\n          esperado: " ++ show esperado
+                                   ++ "\n          obtido:   " ++ show obtido)
+
+-- | Partida usada nos testes: a maior goleada do campeonato (rodada 1, 1x8).
+partidaExemplo :: Partida
+partidaExemplo = Partida 1 "Coritiba" 1 8 "Athletico"
+
+-- | Classificação final do campeonato de exemplo.
+final :: [Linha]
+final = classificacao campeonato
 
 -- Main
 
@@ -407,3 +424,5 @@ main = do
   putStrLn ("lerCampeonato (para no primeiro erro): " ++ show (lerCampeonato dadosComErros))
   putStrLn "todosOsErros (lista todos os problemas):"
   mapM_ print (todosOsErros dadosComErros)
+  putStrLn "\n=== 5. TESTES ==="
+  rodarTestes

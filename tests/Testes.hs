@@ -91,8 +91,8 @@ testesCamada2 = do
   -- Estatisticas e casos vazios
   testar "maiorGoleada do campeonato (8x1)"
          (maiorGoleada campeonato) (Just partidaExemplo)
-  testar "mediaGols do campeonato (154 gols em 32 jogos)"
-         (mediaGols campeonato) (Just 4.8125)
+  testar "mediaGols do campeonato (77 gols em 32 jogos)"
+         (mediaGols campeonato) (Just 2.40625)
   testar "maiorGoleada []" (maiorGoleada []) Nothing
   testar "mediaGols []" (mediaGols []) Nothing
   testar "classificacao [] (campeonato vazio)" (classificacao []) []
